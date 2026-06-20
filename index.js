@@ -30,6 +30,7 @@ async function run() {
     const TaskCollection = database.collection("task");
     const ProposalsCollection = database.collection("proposals");
     const UserCollection = database.collection("user");
+    const CompletedTaskCollection = database.collection("completedTasks");
 
     // ==========================================
     // PUBLIC ROUTES
@@ -177,11 +178,9 @@ async function run() {
         const { taskId, acceptedProposalId } = req.body;
 
         if (!taskId || !acceptedProposalId) {
-          return res
-            .status(400)
-            .send({
-              error: "Required context identification parameters are missing.",
-            });
+          return res.status(400).send({
+            error: "Required context identification parameters are missing.",
+          });
         }
 
         // 1. Accept targeted profile bid document matching ID
@@ -220,11 +219,9 @@ async function run() {
           "Error managing proposal acceptance transaction workflow:",
           error,
         );
-        res
-          .status(500)
-          .send({
-            error: "Internal server handling mutation execution exception.",
-          });
+        res.status(500).send({
+          error: "Internal server handling mutation execution exception.",
+        });
       }
     });
 
@@ -324,6 +321,172 @@ async function run() {
       } catch (error) {
         console.error("Error fetching freelancer proposals:", error);
         res.status(500).send({ error: "Internal server error" });
+      }
+    });
+
+    // Endpoint A: GET - Fetch active assigned tasks for a specific freelancer
+
+    app.get("/api/freelancer/active-projects", async (req, res) => {
+      try {
+        const { freelancerEmail } = req.query;
+
+        if (!freelancerEmail) {
+          return res
+            .status(400)
+            .send({ error: "Freelancer email query is required." });
+        }
+
+        // Find all accepted proposals submitted by this freelancer
+        const acceptedProposals = await ProposalsCollection.find({
+          $or: [
+            { freelancer_email: freelancerEmail },
+            { freelancerEmail: freelancerEmail },
+          ],
+          status: "accepted",
+        }).toArray();
+
+        if (acceptedProposals.length === 0) {
+          return res.status(200).send([]);
+        }
+
+        const taskIds = acceptedProposals.map((prop) => {
+          return ObjectId.isValid(prop.task_id || prop.taskId)
+            ? new ObjectId(prop.task_id || prop.taskId)
+            : prop.task_id || prop.taskId;
+        });
+
+        const activeTasks = await TaskCollection.find({
+          _id: { $in: taskIds },
+        }).toArray();
+
+        const combinedData = activeTasks.map((task) => {
+          const match = acceptedProposals.find(
+            (p) => String(p.task_id || p.taskId) === String(task._id),
+          );
+          return {
+            ...task,
+            proposalId: match?._id,
+            freelancerEmail: freelancerEmail,
+            // Fallback checks to find who owns the job (client_id / clientEmail)
+            clientEmail:
+              task.client_email || task.clientEmail || "client@giglance.com",
+          };
+        });
+
+        res.status(200).send(combinedData);
+      } catch (error) {
+        console.error("Error fetching active freelancer projects:", error);
+        res.status(500).send({ error: "Internal server handling error." });
+      }
+    });
+
+    // Endpoint: POST - Process transaction and log document record to CompletedTaskCollection
+    app.post("/api/freelancer/projects/submit", async (req, res) => {
+      try {
+        const {
+          taskId,
+          proposalId,
+          taskTitle,
+          clientEmail,
+          freelancerEmail,
+          submittedLink,
+          message,
+        } = req.body;
+
+        if (!taskId || !proposalId || !submittedLink) {
+          return res
+            .status(400)
+            .send({ error: "Missing mandatory data transmission parameters." });
+        }
+
+        // 1. Move parent Task collection status tracking matrix flags to 'completed'
+        await TaskCollection.updateOne(
+          { _id: new ObjectId(taskId) },
+          { $set: { status: "completed", completedAt: new Date() } },
+        );
+
+        // 2. Move Proposal document tracking matrix flags to 'completed'
+        await ProposalsCollection.updateOne(
+          { _id: new ObjectId(proposalId) },
+          {
+            $set: {
+              status: "completed",
+              submittedLink,
+              message,
+              completedAt: new Date(),
+            },
+          },
+        );
+
+        // 3. Document payload architecture logging target
+        const completionReceipt = {
+          taskId: taskId,
+          proposalId: proposalId,
+          taskTitle: taskTitle || "Untitled Contract Assignment",
+          clientEmail: clientEmail,
+          freelancerEmail: freelancerEmail,
+          submittedLink: submittedLink,
+          message: message || "",
+          archivedAt: new Date(),
+        };
+
+        const completionLogResult =
+          await CompletedTaskCollection.insertOne(completionReceipt);
+
+        res.status(200).send({
+          success: true,
+          message:
+            "Data logged and verified across project structures successfully!",
+          receiptId: completionLogResult.insertedId,
+        });
+      } catch (error) {
+        console.error(
+          "Critical crash inside project closing runtime context:",
+          error,
+        );
+        res
+          .status(500)
+          .send({ error: "Internal sequence generation logic exception." });
+      }
+    });
+
+    // Endpoint: GET - Fetch completed tasks based on user role mapping
+    app.get("/api/dashboard/completed-projects", async (req, res) => {
+      try {
+        const { email, role } = req.query;
+
+        if (!email || !role) {
+          return res
+            .status(400)
+            .send({
+              error: "Missing identity validation parameters (email and role).",
+            });
+        }
+
+        let query = {};
+
+        // Dynamically adjust MongoDB query target filters based on dashboard view context
+        if (role === "freelancer") {
+          query = { freelancerEmail: email };
+        } else if (role === "client") {
+          query = { clientEmail: email };
+        } else {
+          return res
+            .status(400)
+            .send({ error: "Invalid account role context parameter." });
+        }
+
+        // Sort by newest completions first
+        const completedList = await CompletedTaskCollection.find(query)
+          .sort({ archivedAt: -1 })
+          .toArray();
+
+        res.status(200).send(completedList);
+      } catch (error) {
+        console.error("Error pulling archived dashboard datasets:", error);
+        res
+          .status(500)
+          .send({ error: "Internal database query handling exception." });
       }
     });
 
