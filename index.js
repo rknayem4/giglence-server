@@ -30,6 +30,7 @@ async function run() {
     const database = client.db("giglance");
     const TaskCollection = database.collection("task");
     const ProposalsCollection = database.collection("proposals");
+    const UserCollection = database.collection("user");
 
     app.get("/api/public/tasks/open", async (req, res) => {
       try {
@@ -42,6 +43,24 @@ async function run() {
         res.send(result);
       } catch (error) {
         console.error("Error fetching open tasks:", error);
+        res.status(500).send({ error: "Internal server error" });
+      }
+    });
+
+    app.get("/api/public/freelancers", async (req, res) => {
+      try {
+        // Only fetch users registered explicitly as freelancers
+        const query = { role: "freelancer" };
+
+        // Project only necessary fields for security (e.g., don't leak passwords or sensitive data)
+        const result = await UserCollection.find(query)
+          .project({ password: 0 })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching freelancers list:", error);
         res.status(500).send({ error: "Internal server error" });
       }
     });
@@ -117,8 +136,6 @@ async function run() {
       }
     });
 
-
-
     // Get Single Task Detail
     app.get("/api/tasks/:id", async (req, res) => {
       try {
@@ -144,17 +161,38 @@ async function run() {
         });
 
         if (alreadyApplied) {
-          return res
-            .status(400)
-            .send({
-              error: "You have already submitted a proposal for this task!",
-            });
+          return res.status(400).send({
+            error: "You have already submitted a proposal for this task!",
+          });
         }
 
         const result = await ProposalsCollection.insertOne(proposal);
         res.status(201).send(result);
       } catch (error) {
         res.status(500).send({ error: "Failed to store proposal" });
+      }
+    });
+
+    app.get("/api/freelancer/proposals", async (req, res) => {
+      try {
+        const freelancerId = req.query.freelancerId;
+
+        if (!freelancerId) {
+          return res
+            .status(400)
+            .send({ error: "Freelancer ID query parameter is required" });
+        }
+
+        // Match proposals containing this specific freelancer_id string
+        const query = { freelancer_id: freelancerId };
+        const result = await ProposalsCollection.find(query)
+          .sort({ submitted_at: -1 })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error("Error fetching freelancer proposals:", error);
+        res.status(500).send({ error: "Internal server error" });
       }
     });
 
