@@ -7,8 +7,7 @@ require("dotenv").config();
 app.use(cors());
 app.use(express.json());
 
-const { MongoClient, ServerApiVersion } = require("mongodb");
-const { ObjectId } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
 app.get("/", (req, res) => {
   res.send("Hello World!");
@@ -32,14 +31,16 @@ async function run() {
     const ProposalsCollection = database.collection("proposals");
     const UserCollection = database.collection("user");
 
+    // ==========================================
+    // PUBLIC ROUTES
+    // ==========================================
+
     app.get("/api/public/tasks/open", async (req, res) => {
       try {
-        // Only find tasks where the status is explicitly 'open'
         const query = { status: "open" };
         const result = await TaskCollection.find(query)
           .sort({ createdAt: -1 })
           .toArray();
-
         res.send(result);
       } catch (error) {
         console.error("Error fetching open tasks:", error);
@@ -49,15 +50,11 @@ async function run() {
 
     app.get("/api/public/freelancers", async (req, res) => {
       try {
-        // Only fetch users registered explicitly as freelancers
         const query = { role: "freelancer" };
-
-        // Project only necessary fields for security (e.g., don't leak passwords or sensitive data)
         const result = await UserCollection.find(query)
           .project({ password: 0 })
           .sort({ createdAt: -1 })
           .toArray();
-
         res.send(result);
       } catch (error) {
         console.error("Error fetching freelancers list:", error);
@@ -65,34 +62,169 @@ async function run() {
       }
     });
 
+    app.get("/api/public/freelancer/:id", async (req, res) => {
+      try {
+        const targetUserId = req.params.id;
+
+        if (!ObjectId.isValid(targetUserId)) {
+          return res
+            .status(400)
+            .send({ error: "Invalid dynamic ID tracking identifier." });
+        }
+
+        const query = { _id: new ObjectId(targetUserId) };
+        const freelancerProfile = await UserCollection.findOne(query, {
+          projection: { password: 0 },
+        });
+
+        if (!freelancerProfile) {
+          return res
+            .status(404)
+            .send({ error: "No profile matching that ID located." });
+        }
+
+        res.send(freelancerProfile);
+      } catch (error) {
+        console.error(
+          "Error inside backend route resolving freelancer profile:",
+          error,
+        );
+        res
+          .status(500)
+          .send({ error: "Internal server runtime execution fault." });
+      }
+    });
+
+    // ==========================================
+    // CLIENT PROJECT CONTROL ENGINES
+    // ==========================================
+
     app.post("/api/client/task-post", async (req, res) => {
-      const task = req.body;
-      const taskNew = {
-        ...task,
-        createdAt: new Date(),
-      };
-      const result = await TaskCollection.insertOne(taskNew);
-      res.send(result);
+      try {
+        const task = req.body;
+        const taskNew = {
+          ...task,
+          status: "open", // Fallback initialization configuration status
+          createdAt: new Date(),
+        };
+        const result = await TaskCollection.insertOne(taskNew);
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ error: "Failed to post project task." });
+      }
     });
 
     app.get("/api/client/tasks", async (req, res) => {
       try {
         const clientId = req.query.clientId;
-
         if (!clientId) {
           return res.status(400).send({ error: "Client ID is required" });
         }
 
-        // Filter by client_id and sort by newest tasks first
-        const query = { client_id: clientId };
+        // Support matching both tracking key schemas cleanly
+        const query = {
+          $or: [{ client_id: clientId }, { clientId: clientId }],
+        };
+
         const result = await TaskCollection.find(query)
           .sort({ createdAt: -1 })
           .toArray();
-
         res.send(result);
       } catch (error) {
         console.error("Error fetching client tasks:", error);
         res.status(500).send({ error: "Internal server error" });
+      }
+    });
+
+    // Fetch and structure proposals matching flexible query schema identifiers
+    app.get("/api/client/proposals", async (req, res) => {
+      try {
+        const { taskId } = req.query;
+        if (!taskId) {
+          return res
+            .status(400)
+            .send({ error: "task ID parameter query string is required" });
+        }
+
+        let query = {
+          $or: [{ taskId: taskId }, { task_id: taskId }],
+        };
+
+        if (ObjectId.isValid(taskId)) {
+          query.$or.push({ taskId: new ObjectId(taskId) });
+          query.$or.push({ task_id: new ObjectId(taskId) });
+        }
+
+        const result = await ProposalsCollection.find(query)
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.status(200).send(result || []);
+      } catch (error) {
+        console.error(
+          "Backend exception processing proposals acquisition fetch:",
+          error,
+        );
+        res
+          .status(500)
+          .send({ error: "Internal server database configuration fault." });
+      }
+    });
+
+    // Atomic transaction workflow: Accept one proposal, reject others, shift main task status
+    app.post("/api/client/proposals/accept", async (req, res) => {
+      try {
+        const { taskId, acceptedProposalId } = req.body;
+
+        if (!taskId || !acceptedProposalId) {
+          return res
+            .status(400)
+            .send({
+              error: "Required context identification parameters are missing.",
+            });
+        }
+
+        // 1. Accept targeted profile bid document matching ID
+        await ProposalsCollection.updateOne(
+          { _id: new ObjectId(acceptedProposalId) },
+          { $set: { status: "accepted" } },
+        );
+
+        // 2. Automatically decline remaining incoming proposals tracking under the parent task
+        await ProposalsCollection.updateMany(
+          {
+            $or: [
+              { taskId: taskId },
+              { taskId: new ObjectId(taskId) },
+              { task_id: taskId },
+              { task_id: new ObjectId(taskId) },
+            ],
+            _id: { $ne: new ObjectId(acceptedProposalId) },
+          },
+          { $set: { status: "rejected" } },
+        );
+
+        // 3. FIX: Changed 'TasksCollection' to correctly reference 'TaskCollection' variable setup
+        await TaskCollection.updateOne(
+          { _id: new ObjectId(taskId) },
+          { $set: { status: "On the progress" } },
+        );
+
+        res.status(200).send({
+          success: true,
+          message:
+            "Workflow operations and proposal state trees updated successfully.",
+        });
+      } catch (error) {
+        console.error(
+          "Error managing proposal acceptance transaction workflow:",
+          error,
+        );
+        res
+          .status(500)
+          .send({
+            error: "Internal server handling mutation execution exception.",
+          });
       }
     });
 
@@ -101,16 +233,13 @@ async function run() {
         const taskId = req.params.id;
         const updatedData = req.body;
 
-        // 1. Find the target task first
         const existingTask = await TaskCollection.findOne({
           _id: new ObjectId(taskId),
         });
-
         if (!existingTask) {
           return res.status(404).send({ error: "Task not found" });
         }
 
-        // 2. Strict Security Constraint: Only allow edits if status is currently "open"
         if (existingTask.status !== "open") {
           return res.status(403).send({
             error:
@@ -118,12 +247,10 @@ async function run() {
           });
         }
 
-        // 3. Remove fields that shouldn't change during an edit
         delete updatedData._id;
         delete updatedData.client_id;
         delete updatedData.createdAt;
 
-        // 4. Update the task documents
         const result = await TaskCollection.updateOne(
           { _id: new ObjectId(taskId) },
           { $set: { ...updatedData, updatedAt: new Date() } },
@@ -136,7 +263,6 @@ async function run() {
       }
     });
 
-    // Get Single Task Detail
     app.get("/api/tasks/:id", async (req, res) => {
       try {
         const result = await TaskCollection.findOne({
@@ -149,12 +275,19 @@ async function run() {
       }
     });
 
-    // Post Freelancer Proposal
+    // ==========================================
+    // FREELANCER CORE PORTALS
+    // ==========================================
+
     app.post("/api/proposals", async (req, res) => {
       try {
         const proposal = req.body;
+        const proposalWithStatus = {
+          ...proposal,
+          status: "pending", // Ensure status initiates as pending
+          submitted_at: new Date(),
+        };
 
-        // Optional: Check if freelancer already applied
         const alreadyApplied = await ProposalsCollection.findOne({
           task_id: proposal.task_id,
           freelancer_email: proposal.freelancer_email,
@@ -166,7 +299,7 @@ async function run() {
           });
         }
 
-        const result = await ProposalsCollection.insertOne(proposal);
+        const result = await ProposalsCollection.insertOne(proposalWithStatus);
         res.status(201).send(result);
       } catch (error) {
         res.status(500).send({ error: "Failed to store proposal" });
@@ -176,14 +309,12 @@ async function run() {
     app.get("/api/freelancer/proposals", async (req, res) => {
       try {
         const freelancerId = req.query.freelancerId;
-
         if (!freelancerId) {
           return res
             .status(400)
             .send({ error: "Freelancer ID query parameter is required" });
         }
 
-        // Match proposals containing this specific freelancer_id string
         const query = { freelancer_id: freelancerId };
         const result = await ProposalsCollection.find(query)
           .sort({ submitted_at: -1 })
@@ -196,16 +327,14 @@ async function run() {
       }
     });
 
-    // Connect the client to the server	(optional starting in v4.7)
+    // Connect the client to the server
     await client.connect();
-    // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!",
     );
-  } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+  } catch (err) {
+    console.dir(err);
   }
 }
 run().catch(console.dir);
