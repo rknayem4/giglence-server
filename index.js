@@ -96,6 +96,73 @@ async function run() {
       }
     });
 
+    // Endpoint: GET - Fetch top 6 latest open tasks for the home landing page
+    app.get("/api/public/featured-tasks", async (req, res) => {
+      try {
+        const featuredOpenTasks = await TaskCollection.find({
+          status: "open", // Safety check rule: ensures blocked/in-progress tasks are excluded
+        })
+          .sort({ createdAt: -1 }) // Sort by latest creation timestamp
+          .limit(6) // Keep the landing grid lightweight and clean
+          .toArray();
+
+        res.status(200).send(featuredOpenTasks);
+      } catch (error) {
+        console.error("Error pulling featured landing data:", error);
+        res
+          .status(500)
+          .send({ error: "Internal registry reading exception fault." });
+      }
+    });
+
+    // Endpoint: GET - Fetch top 4 rated freelancers for the home landing page
+    app.get("/api/public/top-freelancers", async (req, res) => {
+      try {
+        // 1. Gather all system user records under the freelancer category role
+        const contractors = await UserCollection.find({
+          role: "freelancer",
+          isSuspended: false, // Moderation check guardrail rule
+        }).toArray();
+
+        // 2. Hydrate contractor dataset metrics by cross-referencing archival receipts
+        const hydratedTalentProfiles = await Promise.all(
+          contractors.map(async (user) => {
+            // Count total instances of completed jobs inside historical receipts collection
+            const jobCount = await CompletedTaskCollection.countDocuments({
+              freelancerEmail: user.email,
+            });
+
+            return {
+              _id: user._id,
+              name: user.name,
+              email: user.email,
+              image: user.image,
+              skills: user.skills || ["Frontend", "Fullstack", "API Dev"], // Fallback sample skills array
+              averageRating: user.averageRating || 4.9, // Fallback default base rating
+              totalCompletedJobs: jobCount, // Dynamic real-time calculation count
+            };
+          }),
+        );
+
+        // 3. Sort freelancers by performance (Highest job counts and top reviews first)
+        hydratedTalentProfiles.sort(
+          (a, b) =>
+            b.totalCompletedJobs - a.totalCompletedJobs ||
+            b.averageRating - a.averageRating,
+        );
+
+        // 4. Return top 4 choices for the landing page hero carousel row layout
+        res.status(200).send(hydratedTalentProfiles.slice(0, 4));
+      } catch (error) {
+        console.error("Error generating top talent indexes:", error);
+        res
+          .status(500)
+          .send({
+            error: "Failed to assemble professional marketplace profiles.",
+          });
+      }
+    });
+
     // ==========================================
     // CLIENT PROJECT CONTROL ENGINES
     // ==========================================
@@ -608,7 +675,6 @@ async function run() {
       }
     });
 
-
     // Endpoint: DELETE - Permanently remove a task ONLY if its status is 'open'
     app.delete("/api/admin/tasks/:id", async (req, res) => {
       try {
@@ -627,19 +693,15 @@ async function run() {
           });
         }
 
-        res
-          .status(200)
-          .send({
-            success: true,
-            message: "Open task successfully removed from system databases.",
-          });
+        res.status(200).send({
+          success: true,
+          message: "Open task successfully removed from system databases.",
+        });
       } catch (error) {
         console.error("Error executing task deletion sequence:", error);
-        res
-          .status(500)
-          .send({
-            error: "Internal server error processing deletion request.",
-          });
+        res.status(500).send({
+          error: "Internal server error processing deletion request.",
+        });
       }
     });
 
