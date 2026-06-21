@@ -456,11 +456,9 @@ async function run() {
         const { email, role } = req.query;
 
         if (!email || !role) {
-          return res
-            .status(400)
-            .send({
-              error: "Missing identity validation parameters (email and role).",
-            });
+          return res.status(400).send({
+            error: "Missing identity validation parameters (email and role).",
+          });
         }
 
         let query = {};
@@ -487,6 +485,161 @@ async function run() {
         res
           .status(500)
           .send({ error: "Internal database query handling exception." });
+      }
+    });
+
+    // ==========================================
+    // ADMIN CORE PORTALS
+    // ==========================================
+
+    // Endpoint A: GET - Fetch all users for the admin management dashboard
+    app.get("/api/admin/users", async (req, res) => {
+      try {
+        // Fetch all users, sorting by newest registered accounts first
+        const users = await UserCollection.find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.status(200).send(users);
+      } catch (error) {
+        console.error("Error fetching users for admin panel:", error);
+        res
+          .status(500)
+          .send({ error: "Internal server error fetching users." });
+      }
+    });
+
+    // Endpoint B: PATCH - Toggle user suspension status (suspend/unsuspend)
+    app.patch("/api/admin/users/:id/suspend", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { isSuspended } = req.body; // Expecting a boolean value
+
+        if (typeof isSuspended !== "boolean") {
+          return res
+            .status(400)
+            .send({ error: "Missing or invalid isSuspended state property." });
+        }
+
+        const result = await UserCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isSuspended: isSuspended } },
+        );
+
+        if (result.matchedCount === 0) {
+          return res
+            .status(404)
+            .send({ error: "User profile target account not found." });
+        }
+
+        res.status(200).send({
+          success: true,
+          message: isSuspended
+            ? "User account successfully suspended."
+            : "User account successfully unsuspended.",
+        });
+      } catch (error) {
+        console.error(
+          "Critical error updating suspension matrix status:",
+          error,
+        );
+        res
+          .status(500)
+          .send({ error: "Internal server data mutation exception." });
+      }
+    });
+
+    // Endpoint A: GET - Fetch all posted marketplace tasks for the admin overview panel
+    app.get("/api/admin/tasks", async (req, res) => {
+      try {
+        const tasks = await TaskCollection.find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.status(200).send(tasks);
+      } catch (error) {
+        console.error("Error pulling all tasks for admin panel:", error);
+        res
+          .status(500)
+          .send({ error: "Internal server error fetching system tasks." });
+      }
+    });
+
+    // Endpoint B: PATCH - Toggle task block/unblock status matrices
+    app.patch("/api/admin/tasks/:id/block", async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { blockTask } = req.body; // Expecting a boolean value: true (to block), false (to unblock)
+
+        if (typeof blockTask !== "boolean") {
+          return res.status(400).send({
+            error: "Missing or invalid blockAction target flag parameters.",
+          });
+        }
+
+        // Determine the next status string based on the incoming request boolean action flag
+        const nextStatus = blockTask ? "blocked" : "open";
+
+        const result = await TaskCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: nextStatus, updatedByAdminAt: new Date() } },
+        );
+
+        if (result.matchedCount === 0) {
+          return res
+            .status(404)
+            .send({ error: "Target task document registry item not found." });
+        }
+
+        res.status(200).send({
+          success: true,
+          message: blockTask
+            ? "Task successfully blocked."
+            : "Task successfully restored back to open status.",
+        });
+      } catch (error) {
+        console.error(
+          "Critical error changing administrative task visibility status:",
+          error,
+        );
+        res.status(500).send({
+          error: "Internal server error performing task state mutation.",
+        });
+      }
+    });
+
+
+    // Endpoint: DELETE - Permanently remove a task ONLY if its status is 'open'
+    app.delete("/api/admin/tasks/:id", async (req, res) => {
+      try {
+        const { id } = req.params;
+
+        // Strict rule evaluation: match ID AND ensure status is explicitly 'open'
+        const result = await TaskCollection.deleteOne({
+          _id: new ObjectId(id),
+          status: { $in: ["open", null] }, // handles "open" status or tasks with no status field default
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(400).send({
+            error:
+              "Action denied. You can only delete tasks that are currently 'open'.",
+          });
+        }
+
+        res
+          .status(200)
+          .send({
+            success: true,
+            message: "Open task successfully removed from system databases.",
+          });
+      } catch (error) {
+        console.error("Error executing task deletion sequence:", error);
+        res
+          .status(500)
+          .send({
+            error: "Internal server error processing deletion request.",
+          });
       }
     });
 
