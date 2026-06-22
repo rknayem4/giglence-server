@@ -38,11 +38,59 @@ async function run() {
 
     app.get("/api/public/tasks/open", async (req, res) => {
       try {
+        // 1. Parse and sanitize query parameters with fallbacks
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 6;
+        const search = req.query.search || "";
+        const category = req.query.category || "all";
+
+        // 2. Establish baseline filter condition
         const query = { status: "open" };
-        const result = await TaskCollection.find(query)
-          .sort({ createdAt: -1 })
-          .toArray();
-        res.send(result);
+
+        // 3. Add dynamic text searching across Title or Description fields
+        if (search.trim() !== "") {
+          query.$or = [
+            { title: { $regex: search, $options: "i" } },
+            { description: { $regex: search, $options: "i" } },
+          ];
+        }
+
+        // 4. Add flexible category matching (handles keys like 'development' or matching full labels)
+        if (category !== "all" && category !== "") {
+          const categoryMap = {
+            development: "Software Development",
+            design: "UI/UX Design",
+            marketing: "Digital Marketing",
+            writing: "Content Writing",
+            other: "Other Services",
+          };
+
+          const fullLabel = categoryMap[category.toLowerCase()] || category;
+
+          query.$or = [
+            { category: { $regex: `^${category}$`, $options: "i" } },
+            { category: { $regex: `^${fullLabel}$`, $options: "i" } },
+          ];
+        }
+
+        // 5. Query execution matrix running calculations concurrently
+        const skipValue = (page - 1) * limit;
+
+        const [tasks, totalTasksCount] = await Promise.all([
+          TaskCollection.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skipValue)
+            .limit(limit)
+            .toArray(),
+          TaskCollection.countDocuments(query),
+        ]);
+
+        // 6. Return response package containing records metadata
+        res.send({
+          tasks,
+          totalPages: Math.ceil(totalTasksCount / limit),
+          currentPage: page,
+        });
       } catch (error) {
         console.error("Error fetching open tasks:", error);
         res.status(500).send({ error: "Internal server error" });
@@ -155,11 +203,9 @@ async function run() {
         res.status(200).send(hydratedTalentProfiles.slice(0, 4));
       } catch (error) {
         console.error("Error generating top talent indexes:", error);
-        res
-          .status(500)
-          .send({
-            error: "Failed to assemble professional marketplace profiles.",
-          });
+        res.status(500).send({
+          error: "Failed to assemble professional marketplace profiles.",
+        });
       }
     });
 
