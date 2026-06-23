@@ -242,10 +242,7 @@ async function run() {
             }),
 
             // 4. Payments from your paymentCollection matching this client
-            database
-              .collection("paymentCollection")
-              .find({ client_email: email })
-              .toArray(),
+            PaymentCollection.find({ client_email: email }).toArray(),
           ]);
 
         // Aggregate total funds spent safely
@@ -443,6 +440,79 @@ async function run() {
         res.send(result);
       } catch (error) {
         res.status(500).send({ error: "Internal server error" });
+      }
+    });
+
+
+    app.get("/api/client/payments", async (req, res) => {
+      try {
+        const { email } = req.query;
+        if (!email) {
+          return res
+            .status(400)
+            .send({ error: "Client email parameter is required." });
+        }
+
+        const clientPayments = await PaymentCollection.aggregate([
+          {
+            // 🔒 SECURITY FILTER: Only fetch records belonging to this logged-in client
+            $match: { client_email: email },
+          },
+          {
+            $addFields: {
+              cleanedTaskIdStr: { $trim: { input: "$task_id" } },
+            },
+          },
+          {
+            $addFields: {
+              convertedTaskId: {
+                $convert: {
+                  input: "$cleanedTaskIdStr",
+                  to: "objectId",
+                  onError: null,
+                  onNull: null,
+                },
+              },
+            },
+          },
+          {
+            $lookup: {
+              from: "task",
+              localField: "convertedTaskId",
+              foreignField: "_id",
+              as: "taskDetails",
+            },
+          },
+          {
+            $unwind: {
+              path: "$taskDetails",
+              preserveNullAndEmptyArrays: true,
+            },
+          },
+          {
+            $project: {
+              _id: 1,
+              stripe_session_id: 1,
+              freelancer_email: 1,
+              amount: 1,
+              status: 1,
+              task_title: {
+                $ifNull: ["$taskDetails.title", "Archived Project Reference"],
+              },
+              category: { $ifNull: ["$taskDetails.category", "general"] },
+            },
+          },
+          {
+            $sort: { _id: -1 },
+          },
+        ]).toArray();
+
+        res.status(200).send(clientPayments);
+      } catch (error) {
+        console.error("Error loading client payment ledger:", error);
+        res.status(500).send({
+          error: "Internal server error fetching client billing data.",
+        });
       }
     });
 
@@ -721,7 +791,7 @@ async function run() {
             UserCollection.countDocuments({}),
             TaskCollection.countDocuments({}),
             TaskCollection.countDocuments({ status: "open" }),
-            database.collection("paymentCollection").find({}).toArray(),
+            PaymentCollection.find({}).toArray(),
           ]);
 
         // Aggregate payment amount variables cleanly on your runtime matrix
@@ -821,73 +891,69 @@ async function run() {
 
     app.get("/api/admin/payments", async (req, res) => {
       try {
-        const paymentsWithTaskDetails = await PaymentCollection
-          .aggregate([
-            {
-              // Step 1: Trim spaces and safely convert string task_id into an ObjectId
-              $addFields: {
-                cleanedTaskIdStr: { $trim: { input: "$task_id" } },
-              },
+        const paymentsWithTaskDetails = await PaymentCollection.aggregate([
+          {
+            // Step 1: Trim spaces and safely convert string task_id into an ObjectId
+            $addFields: {
+              cleanedTaskIdStr: { $trim: { input: "$task_id" } },
             },
-            {
-              $addFields: {
-                convertedTaskId: {
-                  $convert: {
-                    input: "$cleanedTaskIdStr",
-                    to: "objectId",
-                    onError: null, // Prevents crashing if a string is corrupt
-                    onNull: null,
-                  },
+          },
+          {
+            $addFields: {
+              convertedTaskId: {
+                $convert: {
+                  input: "$cleanedTaskIdStr",
+                  to: "objectId",
+                  onError: null, // Prevents crashing if a string is corrupt
+                  onNull: null,
                 },
               },
             },
-            {
-              // Step 2: Join with the task collection using the safely parsed ObjectId
-              $lookup: {
-                from: "task",
-                localField: "convertedTaskId",
-                foreignField: "_id",
-                as: "taskDetails",
+          },
+          {
+            // Step 2: Join with the task collection using the safely parsed ObjectId
+            $lookup: {
+              from: "task",
+              localField: "convertedTaskId",
+              foreignField: "_id",
+              as: "taskDetails",
+            },
+          },
+          {
+            // Step 3: Flatten the array
+            $unwind: {
+              path: "$taskDetails",
+              preserveNullAndEmptyArrays: true, // VERY IMPORTANT: Prevents dropping the payment line if no task matches!
+            },
+          },
+          {
+            // Step 4: Map properties cleanly for your frontend
+            $project: {
+              _id: 1,
+              stripe_session_id: 1,
+              client_email: 1,
+              freelancer_email: 1,
+              amount: 1,
+              status: 1,
+              // If the task lookup failed, fall back gracefully instead of hiding the row
+              task_title: {
+                $ifNull: ["$taskDetails.title", "Archived Project Reference"],
               },
+              category: { $ifNull: ["$taskDetails.category", "general"] },
             },
-            {
-              // Step 3: Flatten the array
-              $unwind: {
-                path: "$taskDetails",
-                preserveNullAndEmptyArrays: true, // VERY IMPORTANT: Prevents dropping the payment line if no task matches!
-              },
-            },
-            {
-              // Step 4: Map properties cleanly for your frontend
-              $project: {
-                _id: 1,
-                stripe_session_id: 1,
-                client_email: 1,
-                freelancer_email: 1,
-                amount: 1,
-                status: 1,
-                // If the task lookup failed, fall back gracefully instead of hiding the row
-                task_title: {
-                  $ifNull: ["$taskDetails.title", "Archived Project Reference"],
-                },
-                category: { $ifNull: ["$taskDetails.category", "general"] },
-              },
-            },
-            {
-              // Step 5: Sort so newest transactions appear at the top
-              $sort: { _id: -1 },
-            },
-          ])
-          .toArray();
+          },
+          {
+            // Step 5: Sort so newest transactions appear at the top
+            $sort: { _id: -1 },
+          },
+        ]).toArray();
 
         res.status(200).send(paymentsWithTaskDetails);
       } catch (error) {
         console.error("Aggregation Fault loading transaction matrices:", error);
-        res
-          .status(500)
-          .send({
-            error: "Internal server error fetching linked system metrics rows.",
-          });
+        res.status(500).send({
+          error: "Internal server error fetching linked system metrics rows.",
+        });
       }
     });
 
@@ -963,8 +1029,6 @@ async function run() {
         });
       }
     });
-
-    // server.js
 
     app.post("/create-checkout-session", async (req, res) => {
       const { name, amount } = req.body;
