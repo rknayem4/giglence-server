@@ -31,6 +31,7 @@ async function run() {
     const ProposalsCollection = database.collection("proposals");
     const UserCollection = database.collection("user");
     const CompletedTaskCollection = database.collection("completedTasks");
+    const PaymentCollection = database.collection("payment");
 
     // ==========================================
     // PUBLIC ROUTES
@@ -212,6 +213,55 @@ async function run() {
     // ==========================================
     // CLIENT PROJECT CONTROL ENGINES
     // ==========================================
+app.get("/api/client/dashboard-summary", async (req, res) => {
+  try {
+    const { email } = req.query; // Identify the logged-in client (e.g., c@gmail.com)
+
+    if (!email) {
+      return res
+        .status(400)
+        .send({ error: "Client email parameter is required." });
+    }
+
+    // Query your collections using the EXACT keys from your documents
+    const [totalTasks, openTasks, inProgressTasks, rawPayments] =
+      await Promise.all([
+        // 1. Total tasks posted by this client
+        TaskCollection.countDocuments({ client_email: email }),
+        
+        // 2. Open tasks waiting for bids
+        TaskCollection.countDocuments({ client_email: email, status: "open" }),
+        
+        // 3. Tasks currently active/in-progress
+        TaskCollection.countDocuments({ 
+          client_email: email, 
+          status: { $in: ["in_progress", "On the progress"] } 
+        }),
+        
+        // 4. Payments from your paymentCollection matching this client
+        database.collection("paymentCollection").find({ client_email: email }).toArray(),
+      ]);
+
+    // Aggregate total funds spent safely
+    const totalSpent = rawPayments.reduce(
+      (acc, current) => acc + (Number(current.amount) || 0),
+      0,
+    );
+
+    // Send back parameters matching your state configuration keys
+    res.status(200).send({
+      totalTasks,
+      openTasks,
+      inProgressTasks, // This will map cleanly onto your UI cards!
+      totalSpent,
+    });
+  } catch (error) {
+    console.error("Client dashboard loading fault:", error.message);
+    res.status(500).send({
+      error: "Failed to collect client summary metrics records.",
+    });
+  }
+});
 
     app.post("/api/client/task-post", async (req, res) => {
       try {
@@ -605,6 +655,34 @@ async function run() {
     // ==========================================
     // ADMIN CORE PORTALS
     // ==========================================
+    app.get("/api/admin/dashboard-summary", async (req, res) => {
+      try {
+        const [totalUsers, totalTasks, activeTasks, rawPayments] =
+          await Promise.all([
+            UserCollection.countDocuments({}),
+            TaskCollection.countDocuments({}),
+            TaskCollection.countDocuments({ status: "open" }),
+            database.collection("paymentCollection").find({}).toArray(),
+          ]);
+
+        // Aggregate payment amount variables cleanly on your runtime matrix
+        const totalRevenue = rawPayments.reduce(
+          (acc, current) => acc + (Number(current.amount) || 0),
+          0,
+        );
+
+        res.status(200).send({
+          totalUsers,
+          totalTasks,
+          activeTasks,
+          totalRevenue,
+        });
+      } catch (error) {
+        res.status(500).send({
+          error: "Failed to collect admin summary metrics matrix records.",
+        });
+      }
+    });
 
     // Endpoint A: GET - Fetch all users for the admin management dashboard
     app.get("/api/admin/users", async (req, res) => {
