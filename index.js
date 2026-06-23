@@ -443,7 +443,6 @@ async function run() {
       }
     });
 
-
     app.get("/api/client/payments", async (req, res) => {
       try {
         const { email } = req.query;
@@ -542,10 +541,7 @@ async function run() {
               freelancer_email: email,
               status: "in_progress",
             }),
-            database
-              .collection("paymentCollection")
-              .find({ freelancer_email: email })
-              .toArray(),
+            PaymentCollection.find({ freelancer_email: email }).toArray(),
           ]);
 
         // Aggregate total funds earned/received by this freelancer safely
@@ -779,7 +775,78 @@ async function run() {
           .send({ error: "Internal database query handling exception." });
       }
     });
-    //  no commit
+
+    app.get("/api/freelancer/payments", async (req, res) => {
+      try {
+        const { email } = req.query;
+        if (!email) {
+          return res
+            .status(400)
+            .send({ error: "Freelancer email parameter is required." });
+        }
+
+        const freelancerPayments = await PaymentCollection.aggregate([
+          {
+            // 🔒 SECURITY FILTER: Only fetch payouts belonging to this freelancer
+            $match: { freelancer_email: email },
+          },
+          {
+            $addFields: {
+              cleanedTaskIdStr: { $trim: { input: "$task_id" } },
+            },
+          },
+          {
+            $addFields: {
+              convertedTaskId: {
+                $convert: {
+                  input: "$cleanedTaskIdStr",
+                  to: "objectId",
+                  onError: null,
+                  onNull: null,
+                },
+              },
+            },
+          },
+          {
+            $lookup: {
+              from: "task",
+              localField: "convertedTaskId",
+              foreignField: "_id",
+              as: "taskDetails",
+            },
+          },
+          {
+            $unwind: {
+              path: "$taskDetails",
+              preserveNullAndEmptyArrays: true,
+            },
+          },
+          {
+            $project: {
+              _id: 1,
+              stripe_session_id: 1,
+              client_email: 1,
+              amount: 1,
+              status: 1,
+              task_title: {
+                $ifNull: ["$taskDetails.title", "Archived Project Reference"],
+              },
+              category: { $ifNull: ["$taskDetails.category", "general"] },
+            },
+          },
+          {
+            $sort: { _id: -1 },
+          },
+        ]).toArray();
+
+        res.status(200).send(freelancerPayments);
+      } catch (error) {
+        console.error("Error loading freelancer payout ledger:", error);
+        res.status(500).send({
+          error: "Internal server error fetching freelancer earnings data.",
+        });
+      }
+    });
 
     // ==========================================
     // ADMIN CORE PORTALS
