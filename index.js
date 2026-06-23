@@ -213,55 +213,61 @@ async function run() {
     // ==========================================
     // CLIENT PROJECT CONTROL ENGINES
     // ==========================================
-app.get("/api/client/dashboard-summary", async (req, res) => {
-  try {
-    const { email } = req.query; // Identify the logged-in client (e.g., c@gmail.com)
+    app.get("/api/client/dashboard-summary", async (req, res) => {
+      try {
+        const { email } = req.query; // Identify the logged-in client (e.g., c@gmail.com)
 
-    if (!email) {
-      return res
-        .status(400)
-        .send({ error: "Client email parameter is required." });
-    }
+        if (!email) {
+          return res
+            .status(400)
+            .send({ error: "Client email parameter is required." });
+        }
 
-    // Query your collections using the EXACT keys from your documents
-    const [totalTasks, openTasks, inProgressTasks, rawPayments] =
-      await Promise.all([
-        // 1. Total tasks posted by this client
-        TaskCollection.countDocuments({ client_email: email }),
-        
-        // 2. Open tasks waiting for bids
-        TaskCollection.countDocuments({ client_email: email, status: "open" }),
-        
-        // 3. Tasks currently active/in-progress
-        TaskCollection.countDocuments({ 
-          client_email: email, 
-          status: { $in: ["in_progress", "On the progress"] } 
-        }),
-        
-        // 4. Payments from your paymentCollection matching this client
-        database.collection("paymentCollection").find({ client_email: email }).toArray(),
-      ]);
+        // Query your collections using the EXACT keys from your documents
+        const [totalTasks, openTasks, inProgressTasks, rawPayments] =
+          await Promise.all([
+            // 1. Total tasks posted by this client
+            TaskCollection.countDocuments({ client_email: email }),
 
-    // Aggregate total funds spent safely
-    const totalSpent = rawPayments.reduce(
-      (acc, current) => acc + (Number(current.amount) || 0),
-      0,
-    );
+            // 2. Open tasks waiting for bids
+            TaskCollection.countDocuments({
+              client_email: email,
+              status: "open",
+            }),
 
-    // Send back parameters matching your state configuration keys
-    res.status(200).send({
-      totalTasks,
-      openTasks,
-      inProgressTasks, // This will map cleanly onto your UI cards!
-      totalSpent,
+            // 3. Tasks currently active/in-progress
+            TaskCollection.countDocuments({
+              client_email: email,
+              status: { $in: ["in_progress", "On the progress"] },
+            }),
+
+            // 4. Payments from your paymentCollection matching this client
+            database
+              .collection("paymentCollection")
+              .find({ client_email: email })
+              .toArray(),
+          ]);
+
+        // Aggregate total funds spent safely
+        const totalSpent = rawPayments.reduce(
+          (acc, current) => acc + (Number(current.amount) || 0),
+          0,
+        );
+
+        // Send back parameters matching your state configuration keys
+        res.status(200).send({
+          totalTasks,
+          openTasks,
+          inProgressTasks, // This will map cleanly onto your UI cards!
+          totalSpent,
+        });
+      } catch (error) {
+        console.error("Client dashboard loading fault:", error.message);
+        res.status(500).send({
+          error: "Failed to collect client summary metrics records.",
+        });
+      }
     });
-  } catch (error) {
-    console.error("Client dashboard loading fault:", error.message);
-    res.status(500).send({
-      error: "Failed to collect client summary metrics records.",
-    });
-  }
-});
 
     app.post("/api/client/task-post", async (req, res) => {
       try {
@@ -337,55 +343,51 @@ app.get("/api/client/dashboard-summary", async (req, res) => {
 
     // Atomic transaction workflow: Accept one proposal, reject others, shift main task status
     app.post("/api/client/proposals/accept", async (req, res) => {
-      try {
-        const { taskId, acceptedProposalId } = req.body;
+      const { taskId, acceptedProposalId } = req.body;
 
-        if (!taskId || !acceptedProposalId) {
-          return res.status(400).send({
-            error: "Required context identification parameters are missing.",
-          });
-        }
-
-        // 1. Accept targeted profile bid document matching ID
-        await ProposalsCollection.updateOne(
-          { _id: new ObjectId(acceptedProposalId) },
-          { $set: { status: "accepted" } },
-        );
-
-        // 2. Automatically decline remaining incoming proposals tracking under the parent task
-        await ProposalsCollection.updateMany(
-          {
-            $or: [
-              { taskId: taskId },
-              { taskId: new ObjectId(taskId) },
-              { task_id: taskId },
-              { task_id: new ObjectId(taskId) },
-            ],
-            _id: { $ne: new ObjectId(acceptedProposalId) },
+      // accepted proposal
+      await ProposalCollection.updateOne(
+        {
+          _id: new ObjectId(acceptedProposalId),
+        },
+        {
+          $set: {
+            status: "accepted",
           },
-          { $set: { status: "rejected" } },
-        );
+        },
+      );
 
-        // 3. FIX: Changed 'TasksCollection' to correctly reference 'TaskCollection' variable setup
-        await TaskCollection.updateOne(
-          { _id: new ObjectId(taskId) },
-          { $set: { status: "On the progress" } },
-        );
+      // reject others
+      await ProposalCollection.updateMany(
+        {
+          task_id: taskId,
+          _id: {
+            $ne: new ObjectId(acceptedProposalId),
+          },
+        },
+        {
+          $set: {
+            status: "rejected",
+          },
+        },
+      );
 
-        res.status(200).send({
-          success: true,
-          message:
-            "Workflow operations and proposal state trees updated successfully.",
-        });
-      } catch (error) {
-        console.error(
-          "Error managing proposal acceptance transaction workflow:",
-          error,
-        );
-        res.status(500).send({
-          error: "Internal server handling mutation execution exception.",
-        });
-      }
+      // update task
+
+      await TaskCollection.updateOne(
+        {
+          _id: new ObjectId(taskId),
+        },
+        {
+          $set: {
+            status: "On the progress",
+          },
+        },
+      );
+
+      res.send({
+        success: true,
+      });
     });
 
     app.patch("/api/client/task-edit/:id", async (req, res) => {
@@ -438,6 +440,54 @@ app.get("/api/client/dashboard-summary", async (req, res) => {
     // ==========================================
     // FREELANCER CORE PORTALS
     // ==========================================
+
+    app.get("/api/freelancer/dashboard-summary", async (req, res) => {
+      try {
+        const { email } = req.query; // Identify logged-in freelancer (e.g., f1@gmail.com)
+
+        if (!email) {
+          return res
+            .status(400)
+            .send({ error: "Freelancer email parameter is required." });
+        }
+
+        // Query collections filtered specifically by the freelancer's email field identifiers
+        const [totalProposals, pendingProposals, activeProposals, rawPayments] =
+          await Promise.all([
+            ProposalsCollection.countDocuments({ freelancer_email: email }),
+            ProposalsCollection.countDocuments({
+              freelancer_email: email,
+              status: "pending",
+            }),
+            ProposalsCollection.countDocuments({
+              freelancer_email: email,
+              status: "in_progress",
+            }),
+            database
+              .collection("paymentCollection")
+              .find({ freelancer_email: email })
+              .toArray(),
+          ]);
+
+        // Aggregate total funds earned/received by this freelancer safely
+        const totalEarnings = rawPayments.reduce(
+          (acc, current) => acc + (Number(current.amount) || 0),
+          0,
+        );
+
+        res.status(200).send({
+          totalProposals,
+          pendingProposals,
+          activeProposals,
+          totalEarnings,
+        });
+      } catch (error) {
+        console.error("Freelancer dashboard logic fault:", error.message);
+        res.status(500).send({
+          error: "Failed to collect freelancer summary metrics records.",
+        });
+      }
+    });
 
     app.post("/api/proposals", async (req, res) => {
       try {
@@ -828,6 +878,44 @@ app.get("/api/client/dashboard-summary", async (req, res) => {
           error: "Internal server error processing deletion request.",
         });
       }
+    });
+
+    // server.js
+
+    app.post("/create-checkout-session", async (req, res) => {
+      const { name, amount } = req.body;
+
+      const session = await stripe.checkout.sessions.create({
+        ui_mode: "custom",
+        mode: "payment",
+
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: {
+                name,
+              },
+              unit_amount: amount * 100,
+            },
+            quantity: 1,
+          },
+        ],
+
+        return_url: `${FRONTEND_URL}/dashboard/client/task-proposals/success?session_id={CHECKOUT_SESSION_ID}`,
+      });
+
+      res.json({
+        clientSecret: session.client_secret,
+      });
+    });
+
+    app.post("/payments/save", async (req, res) => {
+      const payment = req.body;
+
+      const result = await PaymentCollection.insertOne(payment);
+
+      res.send(result);
     });
 
     // Connect the client to the server
