@@ -816,6 +816,81 @@ async function run() {
       }
     });
 
+    // Endpoint A: GET - Fetch all transaction for the admin transaction section
+    // const { ObjectId } = require("mongodb");
+
+    app.get("/api/admin/payments", async (req, res) => {
+      try {
+        const paymentsWithTaskDetails = await PaymentCollection
+          .aggregate([
+            {
+              // Step 1: Trim spaces and safely convert string task_id into an ObjectId
+              $addFields: {
+                cleanedTaskIdStr: { $trim: { input: "$task_id" } },
+              },
+            },
+            {
+              $addFields: {
+                convertedTaskId: {
+                  $convert: {
+                    input: "$cleanedTaskIdStr",
+                    to: "objectId",
+                    onError: null, // Prevents crashing if a string is corrupt
+                    onNull: null,
+                  },
+                },
+              },
+            },
+            {
+              // Step 2: Join with the task collection using the safely parsed ObjectId
+              $lookup: {
+                from: "task",
+                localField: "convertedTaskId",
+                foreignField: "_id",
+                as: "taskDetails",
+              },
+            },
+            {
+              // Step 3: Flatten the array
+              $unwind: {
+                path: "$taskDetails",
+                preserveNullAndEmptyArrays: true, // VERY IMPORTANT: Prevents dropping the payment line if no task matches!
+              },
+            },
+            {
+              // Step 4: Map properties cleanly for your frontend
+              $project: {
+                _id: 1,
+                stripe_session_id: 1,
+                client_email: 1,
+                freelancer_email: 1,
+                amount: 1,
+                status: 1,
+                // If the task lookup failed, fall back gracefully instead of hiding the row
+                task_title: {
+                  $ifNull: ["$taskDetails.title", "Archived Project Reference"],
+                },
+                category: { $ifNull: ["$taskDetails.category", "general"] },
+              },
+            },
+            {
+              // Step 5: Sort so newest transactions appear at the top
+              $sort: { _id: -1 },
+            },
+          ])
+          .toArray();
+
+        res.status(200).send(paymentsWithTaskDetails);
+      } catch (error) {
+        console.error("Aggregation Fault loading transaction matrices:", error);
+        res
+          .status(500)
+          .send({
+            error: "Internal server error fetching linked system metrics rows.",
+          });
+      }
+    });
+
     // Endpoint B: PATCH - Toggle task block/unblock status matrices
     app.patch("/api/admin/tasks/:id/block", async (req, res) => {
       try {
