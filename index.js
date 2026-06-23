@@ -343,51 +343,60 @@ async function run() {
 
     // Atomic transaction workflow: Accept one proposal, reject others, shift main task status
     app.post("/api/client/proposals/accept", async (req, res) => {
-      const { taskId, acceptedProposalId } = req.body;
+      try {
+        const { taskId, acceptedProposalId } = req.body;
 
-      // accepted proposal
-      await ProposalCollection.updateOne(
-        {
-          _id: new ObjectId(acceptedProposalId),
-        },
-        {
-          $set: {
-            status: "accepted",
+        // 1. Selected proposal accept
+        await ProposalsCollection.updateOne(
+          {
+            _id: new ObjectId(acceptedProposalId),
           },
-        },
-      );
-
-      // reject others
-      await ProposalCollection.updateMany(
-        {
-          task_id: taskId,
-          _id: {
-            $ne: new ObjectId(acceptedProposalId),
+          {
+            $set: {
+              status: "accepted",
+            },
           },
-        },
-        {
-          $set: {
-            status: "rejected",
+        );
+
+        // 2. Other proposals reject
+        await ProposalsCollection.updateMany(
+          {
+            task_id: taskId, // string হিসেবেই থাকবে
+            _id: {
+              $ne: new ObjectId(acceptedProposalId),
+            },
           },
-        },
-      );
-
-      // update task
-
-      await TaskCollection.updateOne(
-        {
-          _id: new ObjectId(taskId),
-        },
-        {
-          $set: {
-            status: "On the progress",
+          {
+            $set: {
+              status: "rejected",
+            },
           },
-        },
-      );
+        );
 
-      res.send({
-        success: true,
-      });
+        // 3. Update task status
+        await TaskCollection.updateOne(
+          {
+            _id: new ObjectId(taskId),
+          },
+          {
+            $set: {
+              status: "in_progress",
+            },
+          },
+        );
+
+        res.send({
+          success: true,
+          message: "Proposal accepted successfully",
+        });
+      } catch (error) {
+        console.log(error);
+
+        res.status(500).send({
+          success: false,
+          error: error.message,
+        });
+      }
     });
 
     app.patch("/api/client/task-edit/:id", async (req, res) => {
