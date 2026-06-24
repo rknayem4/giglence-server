@@ -30,7 +30,7 @@ const verifyTokenAdmin = async (req, res, next) => {
   try {
     const { payload } = await jwtVerify(token, JWKS);
     if (payload.role == "admin") {
-      console.log(payload.role);
+      // console.log(payload.role);
       next();
     }
   } catch (error) {
@@ -50,7 +50,7 @@ const verifyTokenFreelancer = async (req, res, next) => {
   try {
     const { payload } = await jwtVerify(token, JWKS);
     if (payload.role == "freelancer") {
-      console.log(payload.role);
+      // console.log(payload.role);
       next();
     }
   } catch (error) {
@@ -70,7 +70,7 @@ const verifyTokenClient = async (req, res, next) => {
   try {
     const { payload } = await jwtVerify(token, JWKS);
     if (payload.role == "client") {
-      console.log(payload.role);
+      // console.log(payload.role);
       next();
     }
   } catch (error) {
