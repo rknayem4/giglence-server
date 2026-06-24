@@ -8,10 +8,36 @@ app.use(cors());
 app.use(express.json());
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 
 app.get("/", (req, res) => {
   res.send("Hello World!");
 });
+
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.FRONTEND_URL}/api/auth/jwks`),
+);
+
+const verifyTokenAdmin = async (req, res, next) => {
+  const authHeader = req?.headers.authorization;
+  if (!authHeader) {
+    return res.status(404).json({ message: "unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(404).json({ message: "unauthorized" });
+  }
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    if (payload.role == "admin") {
+      console.log(payload.role);
+      next();
+    }
+  } catch (error) {
+    return res.status(403).json({ message: "forbidden" });
+  }
+};
+
 
 const uri = process.env.MONGODB_URI;
 
@@ -851,34 +877,38 @@ async function run() {
     // ==========================================
     // ADMIN CORE PORTALS
     // ==========================================
-    app.get("/api/admin/dashboard-summary", async (req, res) => {
-      try {
-        const [totalUsers, totalTasks, activeTasks, rawPayments] =
-          await Promise.all([
-            UserCollection.countDocuments({}),
-            TaskCollection.countDocuments({}),
-            TaskCollection.countDocuments({ status: "open" }),
-            PaymentCollection.find({}).toArray(),
-          ]);
+    app.get(
+      "/api/admin/dashboard-summary",
+      verifyTokenAdmin,
+      async (req, res) => {
+        try {
+          const [totalUsers, totalTasks, activeTasks, rawPayments] =
+            await Promise.all([
+              UserCollection.countDocuments({}),
+              TaskCollection.countDocuments({}),
+              TaskCollection.countDocuments({ status: "open" }),
+              PaymentCollection.find({}).toArray(),
+            ]);
 
-        // Aggregate payment amount variables cleanly on your runtime matrix
-        const totalRevenue = rawPayments.reduce(
-          (acc, current) => acc + (Number(current.amount) || 0),
-          0,
-        );
+          // Aggregate payment amount variables cleanly on your runtime matrix
+          const totalRevenue = rawPayments.reduce(
+            (acc, current) => acc + (Number(current.amount) || 0),
+            0,
+          );
 
-        res.status(200).send({
-          totalUsers,
-          totalTasks,
-          activeTasks,
-          totalRevenue,
-        });
-      } catch (error) {
-        res.status(500).send({
-          error: "Failed to collect admin summary metrics matrix records.",
-        });
-      }
-    });
+          res.status(200).send({
+            totalUsers,
+            totalTasks,
+            activeTasks,
+            totalRevenue,
+          });
+        } catch (error) {
+          res.status(500).send({
+            error: "Failed to collect admin summary metrics matrix records.",
+          });
+        }
+      },
+    );
 
     // Endpoint A: GET - Fetch all users for the admin management dashboard
     app.get("/api/admin/users", async (req, res) => {
@@ -956,7 +986,7 @@ async function run() {
     // Endpoint A: GET - Fetch all transaction for the admin transaction section
     // const { ObjectId } = require("mongodb");
 
-    app.get("/api/admin/payments", async (req, res) => {
+    app.get("/api/admin/payments", verifyTokenAdmin, async (req, res) => {
       try {
         const paymentsWithTaskDetails = await PaymentCollection.aggregate([
           {
