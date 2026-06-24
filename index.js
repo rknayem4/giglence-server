@@ -911,7 +911,7 @@ async function run() {
     );
 
     // Endpoint A: GET - Fetch all users for the admin management dashboard
-    app.get("/api/admin/users", async (req, res) => {
+    app.get("/api/admin/users", verifyTokenAdmin, async (req, res) => {
       try {
         // Fetch all users, sorting by newest registered accounts first
         const users = await UserCollection.find({})
@@ -928,7 +928,7 @@ async function run() {
     });
 
     // Endpoint B: PATCH - Toggle user suspension status (suspend/unsuspend)
-    app.patch("/api/admin/users/:id/suspend", async (req, res) => {
+    app.patch("/api/admin/users/:id/suspend", verifyTokenAdmin, async (req, res) => {
       try {
         const { id } = req.params;
         const { isSuspended } = req.body; // Expecting a boolean value
@@ -968,7 +968,7 @@ async function run() {
     });
 
     // Endpoint A: GET - Fetch all posted marketplace tasks for the admin overview panel
-    app.get("/api/admin/tasks", async (req, res) => {
+    app.get("/api/admin/tasks", verifyTokenAdmin, async (req, res) => {
       try {
         const tasks = await TaskCollection.find({})
           .sort({ createdAt: -1 })
@@ -1055,7 +1055,7 @@ async function run() {
     });
 
     // Endpoint B: PATCH - Toggle task block/unblock status matrices
-    app.patch("/api/admin/tasks/:id/block", async (req, res) => {
+    app.patch("/api/admin/tasks/:id/block", verifyTokenAdmin, async (req, res) => {
       try {
         const { id } = req.params;
         const { blockTask } = req.body; // Expecting a boolean value: true (to block), false (to unblock)
@@ -1098,7 +1098,7 @@ async function run() {
     });
 
     // Endpoint: DELETE - Permanently remove a task ONLY if its status is 'open'
-    app.delete("/api/admin/tasks/:id", async (req, res) => {
+    app.delete("/api/admin/tasks/:id",verifyTokenAdmin, async (req, res) => {
       try {
         const { id } = req.params;
 
