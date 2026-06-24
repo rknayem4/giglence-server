@@ -38,6 +38,28 @@ const verifyTokenAdmin = async (req, res, next) => {
   }
 };
 
+const verifyTokenFreelancer = async (req, res, next) => {
+  const authHeader = req?.headers.authorization;
+  if (!authHeader) {
+    return res.status(404).json({ message: "unauthorized" });
+  }
+  const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(404).json({ message: "unauthorized" });
+  }
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+    if (payload.role == "freelancer") {
+      console.log(payload.role);
+      next();
+    }
+  } catch (error) {
+    return res.status(403).json({ message: "forbidden" });
+  }
+};
+
+
+
 
 const uri = process.env.MONGODB_URI;
 
@@ -545,7 +567,7 @@ async function run() {
     // FREELANCER CORE PORTALS
     // ==========================================
 
-    app.get("/api/freelancer/dashboard-summary", async (req, res) => {
+    app.get("/api/freelancer/dashboard-summary", verifyTokenFreelancer, async (req, res) => {
       try {
         const { email } = req.query; // Identify logged-in freelancer (e.g., f1@gmail.com)
 
@@ -590,7 +612,7 @@ async function run() {
       }
     });
 
-    app.post("/api/proposals", async (req, res) => {
+    app.post("/api/proposals", verifyTokenFreelancer, async (req, res) => {
       try {
         const proposal = req.body;
         const proposalWithStatus = {
@@ -617,7 +639,7 @@ async function run() {
       }
     });
 
-    app.get("/api/freelancer/proposals", async (req, res) => {
+    app.get("/api/freelancer/proposals", verifyTokenFreelancer, async (req, res) => {
       try {
         const freelancerId = req.query.freelancerId;
         if (!freelancerId) {
@@ -640,7 +662,7 @@ async function run() {
 
     // Endpoint A: GET - Fetch active assigned tasks for a specific freelancer
 
-    app.get("/api/freelancer/active-projects", async (req, res) => {
+    app.get("/api/freelancer/active-projects", verifyTokenFreelancer, async (req, res) => {
       try {
         const { freelancerEmail } = req.query;
 
@@ -695,7 +717,7 @@ async function run() {
     });
 
     // Endpoint: POST - Process transaction and log document record to CompletedTaskCollection
-    app.post("/api/freelancer/projects/submit", async (req, res) => {
+    app.post("/api/freelancer/projects/submit", verifyTokenFreelancer, async (req, res) => {
       try {
         const {
           taskId,
@@ -765,7 +787,7 @@ async function run() {
     });
 
     // Endpoint: GET - Fetch completed tasks based on user role mapping
-    app.get("/api/dashboard/completed-projects", async (req, res) => {
+    app.get("/api/dashboard/completed-projects",verifyTokenFreelancer, async (req, res) => {
       try {
         const { email, role } = req.query;
 
@@ -802,7 +824,7 @@ async function run() {
       }
     });
 
-    app.get("/api/freelancer/payments", async (req, res) => {
+    app.get("/api/freelancer/payments", verifyTokenFreelancer, async (req, res) => {
       try {
         const { email } = req.query;
         if (!email) {
