@@ -90,7 +90,7 @@ const client = new MongoClient(uri, {
 });
 
 // async function run() {
-//   try {
+//   try {---
 
 client
   .connect(() => {
@@ -1061,7 +1061,7 @@ app.patch(
 );
 
 // Endpoint A: GET - Fetch all posted marketplace tasks for the admin overview panel
-app.get("/api/admin/tasks", verifyTokenAdmin, async (req, res) => {
+app.get("/api/admin/tasks",  async (req, res) => {
   try {
     const tasks = await TaskCollection.find({})
       .sort({ createdAt: -1 })
